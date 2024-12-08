@@ -1,0 +1,313 @@
+local ownerid = 1466752073
+local toggle, running, message, floodMode = false, true, "", false
+local whitelist = {} -- Table to store whitelisted player UserIds
+local followingPlayer = nil -- The player the bot is following
+local flying = {} -- Track which players are flying
+local hoverHeight = 5 -- Distance the bot will hover above the ground (adjust as needed)
+local bot = game.Players.LocalPlayer.Character -- Assuming this is the bot (replace with your bot's character if needed)
+
+-- Function to generate random letters
+local function generateRandomLetters(length)
+    local letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    local result = ""
+    for i = 1, length do
+        local randomIndex = math.random(1, #letters)
+        result = result .. letters:sub(randomIndex, randomIndex)
+    end
+    return result
+end
+
+-- Function to teleport all players behind the owner
+local function bringPlayers(owner)
+    if not owner.Character or not owner.Character:FindFirstChild("HumanoidRootPart") then
+        warn("Owner's character or HumanoidRootPart not found!")
+        return
+    end
+
+    local ownerHRP = owner.Character.HumanoidRootPart
+    for _, player in ipairs(game.Players:GetPlayers()) do
+        if player ~= owner and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local playerHRP = player.Character.HumanoidRootPart
+            local bringPosition = ownerHRP.Position - ownerHRP.CFrame.LookVector * 5 -- Adjust distance behind owner
+            playerHRP.CFrame = CFrame.new(bringPosition) * CFrame.Angles(0, math.rad(ownerHRP.Orientation.Y), 0)
+        end
+    end
+end
+
+-- Function to make the bot follow the owner
+local function followPlayer(owner)
+    -- Ensure owner has a HumanoidRootPart
+    if not owner.Character or not owner.Character:FindFirstChild("HumanoidRootPart") then
+        warn("Owner's character or HumanoidRootPart not found!")
+        return
+    end
+
+    local ownerHRP = owner.Character.HumanoidRootPart
+    while followingPlayer do
+        -- Make the bot follow the owner's HumanoidRootPart
+        if owner.Character and owner.Character:FindFirstChild("HumanoidRootPart") then
+            local followPosition = ownerHRP.Position + ownerHRP.CFrame.LookVector * 5 -- Follow behind owner
+            followingPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(followPosition)
+        end
+        wait(0.5) -- Adjust follow speed
+    end
+end
+
+-- Function to check ground position (return the Y position of the ground below the bot)
+local function getGroundYPosition(humanoidRootPart)
+    local rayOrigin = humanoidRootPart.Position + Vector3.new(0, hoverHeight, 0)  -- Start above the bot
+    local rayDirection = Vector3.new(0, -100, 0) -- Direction towards the ground
+    local ray = game.Workspace:Raycast(rayOrigin, rayDirection)
+    
+    -- If the ray hits something, return the position, else return the bot's current Y
+    if ray then
+        return ray.Position.Y
+    else
+        return humanoidRootPart.Position.Y
+    end
+end
+
+-- Function to make the screen turn white
+local function whiteoutScreen(player)
+    -- Check if the player has a PlayerGui
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if playerGui then
+        -- Create a new ScreenGui if not already there
+        local screenGui = Instance.new("ScreenGui")
+        screenGui.Name = "WhiteoutGui"
+        screenGui.Parent = playerGui
+
+        -- Create a Frame that will cover the entire screen
+        local frame = Instance.new("Frame")
+        frame.Size = UDim2.new(1, 0, 1, 0)
+        frame.Position = UDim2.new(0, 0, 0, 0)
+        frame.BackgroundColor3 = Color3.fromRGB(255, 255, 255) -- White color
+        frame.BackgroundTransparency = 0 -- Make it fully opaque
+        frame.Parent = screenGui
+    end
+end
+
+-- Function to remove the whiteout screen
+local function removeWhiteout(player)
+    -- Check if the WhiteoutGui exists and remove it
+    local playerGui = player:FindFirstChild("PlayerGui")
+    if playerGui then
+        local whiteoutGui = playerGui:FindFirstChild("WhiteoutGui")
+        if whiteoutGui then
+            whiteoutGui:Destroy()
+        end
+    end
+end
+
+-- Function to fling a player (apply a force to their HumanoidRootPart)
+local function flingPlayer(player)
+    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        local humanoidRootPart = player.Character.HumanoidRootPart
+
+        -- Create a BodyVelocity to apply a fling force
+        local bodyVelocity = Instance.new("BodyVelocity")
+        bodyVelocity.MaxForce = Vector3.new(500000, 500000, 500000) -- High force
+        bodyVelocity.Velocity = humanoidRootPart.CFrame.LookVector * math.random(1000, 3000) + Vector3.new(0, math.random(500, 1000), 0) -- Random fling direction and force
+        bodyVelocity.Parent = humanoidRootPart
+
+        -- Remove the BodyVelocity after a short duration to stop the fling
+        game.Debris:AddItem(bodyVelocity, 0.5)
+        
+        player:SendSystemMessage(player.Name .. " has been flung!")
+    end
+end
+
+-- Function to make the bot teleport to a target player and fling them
+local function teleportAndFling(targetPlayer)
+    if targetPlayer and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        -- Teleport the bot to the target player
+        local targetHRP = targetPlayer.Character.HumanoidRootPart
+        if bot and bot:FindFirstChild("HumanoidRootPart") then
+            local botHRP = bot.HumanoidRootPart
+            botHRP.CFrame = targetHRP.CFrame -- Teleport bot to target player's location
+            wait(1) -- Wait for teleportation to complete
+
+            -- Now fling the target player
+            flingPlayer(targetPlayer)
+        end
+    end
+end
+
+-- Function to handle commands
+local function handlecmd(p, c)
+    -- Check if player is whitelisted using string:find() on their username
+    local isWhitelisted = false
+    for _, id in ipairs(whitelist) do
+        if game.Players:GetNameFromUserId(id):find(p.Name:lower(), 1, true) then
+            isWhitelisted = true
+            break
+        end
+    end
+
+    -- If the player isn't whitelisted or the owner, deny access
+    if not isWhitelisted and p.UserId ~= ownerid then
+        p:SendSystemMessage("You are not whitelisted to use commands.")
+        return
+    end
+
+    local cmd, msg = c:match("^(%.%w+)%s*(.*)")
+
+    if cmd == ".spam" then
+        message = msg or ""
+        toggle = true
+        floodMode = false
+    elseif cmd == ".sigma" then
+        message = "sigma"
+        toggle = true
+        floodMode = false
+    elseif cmd == ".flood" then
+        toggle = true
+        floodMode = true -- Enable random letter spamming
+    elseif cmd == ".stop" then
+        toggle = false
+        floodMode = false
+        message = ""
+    elseif cmd == ".bring" then
+        bringPlayers(p)
+    elseif cmd == ".whitelist" then
+        if msg then
+            local targetPlayer = game.Players:FindFirstChild(msg)
+            if targetPlayer then
+                table.insert(whitelist, targetPlayer.UserId)
+                p:SendSystemMessage(targetPlayer.Name .. " has been added to the whitelist.")
+            else
+                p:SendSystemMessage("Player not found.")
+            end
+        else
+            p:SendSystemMessage("Usage: .whitelist <PlayerName>")
+        end
+    elseif cmd == ".removewhitelist" then
+        if msg then
+            local targetPlayer = game.Players:FindFirstChild(msg)
+            if targetPlayer then
+                -- Remove the player from the whitelist
+                local playerIdStr = tostring(targetPlayer.UserId)
+                for i, v in ipairs(whitelist) do
+                    if tostring(v) == playerIdStr then
+                        table.remove(whitelist, i)
+                        p:SendSystemMessage(targetPlayer.Name .. " has been removed from the whitelist.")
+                        break
+                    end
+                end
+            else
+                p:SendSystemMessage("Player not found.")
+            end
+        else
+            p:SendSystemMessage("Usage: .removewhitelist <PlayerName>")
+        end
+    elseif cmd == ".follow" then
+        if p.UserId == ownerid then
+            if msg and msg ~= "" then
+                followingPlayer = game.Players:FindFirstChild(msg)
+                if followingPlayer then
+                    p:SendSystemMessage("Now following " .. msg)
+                    followPlayer(followingPlayer)
+                else
+                    p:SendSystemMessage("Player not found.")
+                end
+            else
+                p:SendSystemMessage("Usage: .follow <PlayerName>")
+            end
+        else
+            p:SendSystemMessage("You do not have permission to use the .follow command.")
+        end
+    elseif cmd == ".fly" then
+        -- Hover command
+        if p.Character and p.Character:FindFirstChild("Humanoid") then
+            local humanoidRootPart = p.Character:FindFirstChild("HumanoidRootPart")
+            if humanoidRootPart then
+                if not flying[p.UserId] then
+                    -- Start hovering
+                    flying[p.UserId] = true
+
+                    -- Create BodyPosition to keep the bot at a constant height above the ground
+                    local bodyPosition = Instance.new("BodyPosition")
+                    bodyPosition.MaxForce = Vector3.new(400000, 400000, 400000) -- High force to keep it in position
+                    bodyPosition.D = 1000 -- High damping for smoother hover
+                    bodyPosition.P = 10000 -- High power to resist falling
+                    bodyPosition.Position = Vector3.new(humanoidRootPart.Position.X, getGroundYPosition(humanoidRootPart) + hoverHeight, humanoidRootPart.Position.Z) -- Set hover height above the ground
+                    bodyPosition.Parent = humanoidRootPart
+
+                    -- Create BodyGyro to keep the bot's rotation stable
+                    local bodyGyro = Instance.new("BodyGyro")
+                    bodyGyro.MaxTorque = Vector3.new(400000, 400000, 400000) -- High torque to prevent rotation
+                    bodyGyro.CFrame = humanoidRootPart.CFrame -- Lock the body rotation
+                    bodyGyro.Parent = humanoidRootPart
+
+                    p:SendSystemMessage("You are now hovering above the ground!")
+                else
+                    -- Stop hovering
+                    flying[p.UserId] = nil
+
+                    -- Remove BodyPosition and BodyGyro
+                    local humanoidRootPart = p.Character:FindFirstChild("HumanoidRootPart")
+                    if humanoidRootPart then
+                        for _, v in pairs(humanoidRootPart:GetChildren()) do
+                            if v:IsA("BodyPosition") or v:IsA("BodyGyro") then
+                                v:Destroy()
+                            end
+                        end
+                    end
+
+                    p:SendSystemMessage("You have stopped hovering.")
+                end
+            end
+        end
+    elseif cmd == ".fling" then
+        flingPlayer(p)
+    elseif cmd == ".teleportAndFling" then
+        -- The owner can specify the target player to teleport to and fling
+        local targetPlayerName = msg
+        local targetPlayer = game.Players:FindFirstChild(targetPlayerName)
+        if targetPlayer then
+            teleportAndFling(targetPlayer)
+        else
+            p:SendSystemMessage("Player not found.")
+        end
+    end
+end
+
+-- Connect to player chats
+local function connect()
+    for _, p in ipairs(game.Players:GetPlayers()) do
+        p.Chatted:Connect(function(c) handlecmd(p, c) end)
+    end
+    game.Players.PlayerAdded:Connect(function(p)
+        p.Chatted:Connect(function(c) handlecmd(p, c) end)
+    end)
+end
+
+connect()
+
+-- Send a "bot is up" message only once when the script starts
+local r = game.ReplicatedStorage
+if r:FindFirstChild("DefaultChatSystemChatEvents") then
+    r.DefaultChatSystemChatEvents.SayMessageRequest:FireServer("bot is up", "All")
+end
+
+-- Main loop to handle spamming
+while running do
+    if toggle then
+        if floodMode then
+            message = generateRandomLetters(10) -- Generate random letters (adjust length here)
+        end
+
+        if message ~= "" then
+            local r = game.ReplicatedStorage
+            if r:FindFirstChild("DefaultChatSystemChatEvents") then
+                r.DefaultChatSystemChatEvents.SayMessageRequest:FireServer(message, "All")
+            elseif game.TextChatService and game.TextChatService.TextChannels then
+                local generalChannel = game.TextChatService.TextChannels:FindFirstChild("RBXGeneral")
+                if generalChannel then
+                    generalChannel:SendAsync(message)
+                end
+            end
+        end
+    end
+    wait(0.4) -- Adjust for spam frequency
+end
